@@ -34,8 +34,11 @@ python leaderboard.py -n 50
 # Top 10 in Turkey
 python leaderboard.py -n 10 -c TR
 
-# Sites that won voting and are under construction
+# Sites under construction / opening soon (map markers, not voting candidates)
 python leaderboard.py -u
+
+# Under-construction sites in Colombia
+python leaderboard.py -u -c CO
 
 # Use a different Tesla locale
 python leaderboard.py --locale es_co
@@ -46,8 +49,8 @@ python leaderboard.py --locale es_co
 | Flag | Default | Description |
 | --- | --- | --- |
 | `-n`, `--top` | `20` | How many top candidates to show. |
-| `-c`, `--country` | _(none)_ | ISO-2 country code filter (e.g. `US`, `TR`). |
-| `-u`, `--under-construction` | off | Show sites under construction instead of open voting candidates. |
+| `-c`, `--country` | _(none)_ | ISO-2 country code filter (e.g. `US`, `TR`). Works for both voting candidates and `-u` markers. |
+| `-u`, `--under-construction` | off | Show upcoming/under-construction supercharger map markers instead of open voting candidates. Sourced from `App.superchargerNetwork`; markers carry only coordinates, so the location label and country code are reverse-geocoded from lat/lon (offline, via `reverse_geocoder`). |
 | `--locale` | `en_us` | Tesla locale path segment. |
 | `--headless` | off | Run Chrome with no visible window. Akamai detects headless and returns "Access Denied" — not recommended. |
 | `--debug` | off | On failure, write `debug.png` and `debug.html` and print page diagnostics. |

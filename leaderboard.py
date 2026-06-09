@@ -11,6 +11,7 @@ import argparse
 import json
 import re
 import sys
+import time
 
 from patchright.sync_api import sync_playwright
 
@@ -86,18 +87,43 @@ def fetch_app(locale: str = DEFAULT_LOCALE, *, headless: bool = False,
             # the initial HTML. DOM access is shared across patchright's
             # isolated and main worlds, so we can grab the script tag's text
             # directly without needing main-world JS access.
-            script_text = page.evaluate(
-                """
+            #
+            # Akamai often serves a JS "behavioral" bot challenge first; it
+            # runs a sensor and then reloads the real page. So poll for the
+            # window.tesla script to appear rather than reading once.
+            find_script = """
                 () => {
                   const tags = document.querySelectorAll('script');
+                  const re = /window\\.tesla\\s*=\\s*\\{/;
                   for (const t of tags) {
                     const s = t.textContent || '';
-                    if (s.indexOf('window.tesla') !== -1) return s;
+                    if (re.test(s)) return s;
                   }
                   return null;
                 }
                 """
-            )
+            # Poll until we can extract a *complete* window.tesla object. The
+            # inline script may be read mid-stream (truncated), which leaves
+            # the brace scan unbalanced — so we keep retrying until extraction
+            # succeeds rather than stopping at the first sight of the tag.
+            script_text = None
+            payload = None
+            deadline = time.monotonic() + 45
+            while time.monotonic() < deadline:
+                if page.title().strip().lower() == "access denied":
+                    break
+                try:
+                    script_text = page.evaluate(find_script)
+                except Exception:
+                    # Page may be mid-reload (challenge → real page); retry.
+                    script_text = None
+                if script_text:
+                    payload = _extract_window_tesla(script_text)
+                    if payload:
+                        break
+                page.wait_for_timeout(1000)
+
+            title = page.title()
 
             if not script_text:
                 if debug:
@@ -111,14 +137,13 @@ def fetch_app(locale: str = DEFAULT_LOCALE, *, headless: bool = False,
                     + ("  saved debug.png and debug.html\n" if debug else "")
                 )
 
-            payload = _extract_window_tesla(script_text)
             if not payload:
                 if debug:
                     with open("debug.js", "w", encoding="utf-8") as f:
                         f.write(script_text)
                 raise RuntimeError(
-                    "Found the script tag but couldn't extract the "
-                    "`window.tesla = {…}` object literal.\n"
+                    "Found the script tag but couldn't extract a complete "
+                    "`window.tesla = {…}` object literal (timed out waiting).\n"
                     + ("  saved debug.js\n" if debug else "")
                 )
         finally:
@@ -141,19 +166,73 @@ def fetch_app(locale: str = DEFAULT_LOCALE, *, headless: bool = False,
     return app
 
 
-def leaderboard(app: dict, country: str | None = None, limit: int = 20,
-                under_construction: bool = False) -> list[dict]:
-    if under_construction:
-        # Sites that won a voting round move to a construction status; the
-        # exact enum varies, so match any status mentioning CONSTRUCTION.
-        rows = [c for c in app.get("candidates", [])
-                if "CONSTRUCTION" in (c.get("status") or "").upper()]
-    else:
-        rows = [c for c in app.get("candidates", []) if c.get("status") == "ENABLED"]
+UPCOMING_TYPE = "upcoming-supercharger"
+
+
+def leaderboard(app: dict, country: str | None = None, limit: int = 20) -> list[dict]:
+    rows = [c for c in app.get("candidates", []) if c.get("status") == "ENABLED"]
     if country:
         cc = country.upper()
         rows = [r for r in rows if _country_of(r) == cc]
     rows.sort(key=lambda c: c.get("voteCount", 0), reverse=True)
+    return rows[:limit]
+
+
+def _label_markers(markers: list[dict]) -> None:
+    """Attach `_name`, `_admin1`, `_cc` to each marker in place.
+
+    The markers carry only coordinates (title is always "NA" and there's no
+    country code), so we derive a human-readable label by offline reverse
+    geocoding the lat/lon — one batched lookup for the whole list.
+    """
+    try:
+        import reverse_geocoder as rg
+    except ImportError as exc:
+        raise RuntimeError(
+            "Labeling under-construction markers needs reverse_geocoder "
+            "(`pip install reverse_geocoder`)."
+        ) from exc
+
+    coords, idx = [], []
+    for i, m in enumerate(markers):
+        m["_name"] = m["_admin1"] = m["_cc"] = ""
+        try:
+            coords.append((float(m["latitude"]), float(m["longitude"])))
+            idx.append(i)
+        except (TypeError, ValueError, KeyError):
+            continue
+    if not coords:
+        return
+    # mode=1 = single-threaded; the default multiprocessing path is fragile.
+    # rg prints a "Loading..." line to stdout on first use — send it to stderr
+    # so it doesn't pollute the table.
+    import contextlib
+    with contextlib.redirect_stdout(sys.stderr):
+        results = rg.search(coords, mode=1)
+    for i, r in zip(idx, results):
+        markers[i]["_name"] = r.get("name", "")
+        markers[i]["_admin1"] = r.get("admin1", "")
+        markers[i]["_cc"] = (r.get("cc") or "").upper()
+
+
+def under_construction_sites(app: dict, country: str | None = None,
+                             limit: int = 20) -> list[dict]:
+    """Return the "upcoming" supercharger map markers (the lightning-bolt
+    pins for sites being built / opening soon).
+
+    These live in App.superchargerNetwork — a separate dataset from the
+    voting `candidates` array — and carry only a location id and coordinates.
+    Names and country codes are reverse-geocoded from the coordinates, which
+    is also what makes `country` filtering possible here.
+    """
+    net = app.get("superchargerNetwork") or []
+    rows = [m for m in net if UPCOMING_TYPE in (m.get("location_type") or [])]
+    _label_markers(rows)
+    if country:
+        cc = country.upper()
+        rows = [m for m in rows if m.get("_cc") == cc]
+    rows.sort(key=lambda m: (m.get("_cc", ""), m.get("_admin1", ""),
+                             m.get("_name", "")))
     return rows[:limit]
 
 
@@ -181,7 +260,8 @@ def main() -> int:
     )
     parser.add_argument(
         "-u", "--under-construction", action="store_true",
-        help="Show sites under construction instead of open voting candidates.",
+        help="Show upcoming/under-construction supercharger markers instead "
+             "of open voting candidates.",
     )
     parser.add_argument(
         "--locale", default=DEFAULT_LOCALE,
@@ -202,13 +282,30 @@ def main() -> int:
         return 2
 
     app = fetch_app(args.locale, headless=args.headless, debug=args.debug)
-    rows = leaderboard(app, country=args.country, limit=args.top,
-                       under_construction=args.under_construction)
+
+    if args.under_construction:
+        rows = under_construction_sites(app, country=args.country,
+                                        limit=args.top)
+        if not rows:
+            scope = f" in {args.country.upper()}" if args.country else ""
+            print(f"No under-construction sites found{scope}.", file=sys.stderr)
+            return 1
+        print(f"{'Rank':<5} {'Lat':>11}  {'Lon':>12}  {'CC':<3} Location")
+        print("-" * 60)
+        for i, m in enumerate(rows, start=1):
+            label = ", ".join(p for p in (m.get("_name"), m.get("_admin1")) if p)
+            print(
+                f"{i:<5} "
+                f"{m.get('latitude')!s:>11}  {m.get('longitude')!s:>12}  "
+                f"{m.get('_cc', ''):<3} {label}"
+            )
+        return 0
+
+    rows = leaderboard(app, country=args.country, limit=args.top)
 
     if not rows:
         scope = f" in {args.country.upper()}" if args.country else ""
-        kind = "under-construction sites" if args.under_construction else "candidates"
-        print(f"No {kind} found{scope}.", file=sys.stderr)
+        print(f"No candidates found{scope}.", file=sys.stderr)
         return 1
 
     print(f"{'Rank':<5} {'Votes':>7}  {'Lat':>10}  {'Lon':>11}  {'CC':<3} Site")
