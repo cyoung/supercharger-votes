@@ -34,6 +34,9 @@ python leaderboard.py -n 50
 # Top 10 in Turkey
 python leaderboard.py -n 10 -c TR
 
+# Sites that won voting and are under construction
+python leaderboard.py -u
+
 # Use a different Tesla locale
 python leaderboard.py --locale es_co
 ```
@@ -44,6 +47,7 @@ python leaderboard.py --locale es_co
 | --- | --- | --- |
 | `-n`, `--top` | `20` | How many top candidates to show. |
 | `-c`, `--country` | _(none)_ | ISO-2 country code filter (e.g. `US`, `TR`). |
+| `-u`, `--under-construction` | off | Show sites under construction instead of open voting candidates. |
 | `--locale` | `en_us` | Tesla locale path segment. |
 | `--headless` | off | Run Chrome with no visible window. Akamai detects headless and returns "Access Denied" — not recommended. |
 | `--debug` | off | On failure, write `debug.png` and `debug.html` and print page diagnostics. |

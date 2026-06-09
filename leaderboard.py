@@ -141,8 +141,15 @@ def fetch_app(locale: str = DEFAULT_LOCALE, *, headless: bool = False,
     return app
 
 
-def leaderboard(app: dict, country: str | None = None, limit: int = 20) -> list[dict]:
-    rows = [c for c in app.get("candidates", []) if c.get("status") == "ENABLED"]
+def leaderboard(app: dict, country: str | None = None, limit: int = 20,
+                under_construction: bool = False) -> list[dict]:
+    if under_construction:
+        # Sites that won a voting round move to a construction status; the
+        # exact enum varies, so match any status mentioning CONSTRUCTION.
+        rows = [c for c in app.get("candidates", [])
+                if "CONSTRUCTION" in (c.get("status") or "").upper()]
+    else:
+        rows = [c for c in app.get("candidates", []) if c.get("status") == "ENABLED"]
     if country:
         cc = country.upper()
         rows = [r for r in rows if _country_of(r) == cc]
@@ -173,6 +180,10 @@ def main() -> int:
         help="ISO-2 country code filter (e.g. US, TR, NZ).",
     )
     parser.add_argument(
+        "-u", "--under-construction", action="store_true",
+        help="Show sites under construction instead of open voting candidates.",
+    )
+    parser.add_argument(
         "--locale", default=DEFAULT_LOCALE,
         help=f"Tesla locale path segment (default: {DEFAULT_LOCALE}).",
     )
@@ -191,11 +202,13 @@ def main() -> int:
         return 2
 
     app = fetch_app(args.locale, headless=args.headless, debug=args.debug)
-    rows = leaderboard(app, country=args.country, limit=args.top)
+    rows = leaderboard(app, country=args.country, limit=args.top,
+                       under_construction=args.under_construction)
 
     if not rows:
         scope = f" in {args.country.upper()}" if args.country else ""
-        print(f"No candidates found{scope}.", file=sys.stderr)
+        kind = "under-construction sites" if args.under_construction else "candidates"
+        print(f"No {kind} found{scope}.", file=sys.stderr)
         return 1
 
     print(f"{'Rank':<5} {'Votes':>7}  {'Lat':>10}  {'Lon':>11}  {'CC':<3} Site")
