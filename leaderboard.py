@@ -167,6 +167,9 @@ def fetch_app(locale: str = DEFAULT_LOCALE, *, headless: bool = False,
 
 
 UPCOMING_TYPE = "upcoming-supercharger"
+WINNER_TYPE = "supercharger-last-quarter-winner"
+
+_QUARTER_RE = re.compile(r"Q([1-4])\s+(\d{4})")
 
 
 def leaderboard(app: dict, country: str | None = None, limit: int = 20) -> list[dict]:
@@ -236,6 +239,35 @@ def under_construction_sites(app: dict, country: str | None = None,
     return rows[:limit]
 
 
+def _quarter_key(quarter: str | None) -> tuple[int, int]:
+    """Parse a 'Q1 2026'-style label into (year, quarter); (0, 0) if absent."""
+    m = _QUARTER_RE.match((quarter or "").strip())
+    return (int(m.group(2)), int(m.group(1))) if m else (0, 0)
+
+
+def winner_sites(app: dict, country: str | None = None,
+                 limit: int = 20) -> list[dict]:
+    """Return the supercharger markers that won their most recent voting
+    round (`supercharger-last-quarter-winner`), newest winning quarter first.
+
+    Like the upcoming markers these live in App.superchargerNetwork and carry
+    only coordinates plus a `vote_winner_quarter`, so the label and country
+    code are reverse-geocoded from the lat/lon.
+    """
+    net = app.get("superchargerNetwork") or []
+    rows = [m for m in net if WINNER_TYPE in (m.get("location_type") or [])]
+    _label_markers(rows)
+    if country:
+        cc = country.upper()
+        rows = [m for m in rows if m.get("_cc") == cc]
+    rows.sort(key=lambda m: (
+        -_quarter_key(m.get("vote_winner_quarter"))[0],   # newest year first
+        -_quarter_key(m.get("vote_winner_quarter"))[1],   # newest quarter first
+        m.get("_cc", ""), m.get("_admin1", ""), m.get("_name", ""),
+    ))
+    return rows[:limit]
+
+
 def _country_of(candidate: dict) -> str:
     addresses = candidate.get("addresses") or []
     if addresses:
@@ -258,10 +290,16 @@ def main() -> int:
         "-c", "--country",
         help="ISO-2 country code filter (e.g. US, TR, NZ).",
     )
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "-u", "--under-construction", action="store_true",
         help="Show upcoming/under-construction supercharger markers instead "
              "of open voting candidates.",
+    )
+    mode.add_argument(
+        "-w", "--winners", action="store_true",
+        help="Show sites that won their latest voting round, newest quarter "
+             "first, instead of open voting candidates.",
     )
     parser.add_argument(
         "--locale", default=DEFAULT_LOCALE,
@@ -298,6 +336,25 @@ def main() -> int:
                 f"{i:<5} "
                 f"{m.get('latitude')!s:>11}  {m.get('longitude')!s:>12}  "
                 f"{m.get('_cc', ''):<3} {label}"
+            )
+        return 0
+
+    if args.winners:
+        rows = winner_sites(app, country=args.country, limit=args.top)
+        if not rows:
+            scope = f" in {args.country.upper()}" if args.country else ""
+            print(f"No winning sites found{scope}.", file=sys.stderr)
+            return 1
+        print(f"{'Rank':<5} {'Lat':>11}  {'Lon':>12}  {'CC':<3} "
+              f"{'Quarter':<9} Location")
+        print("-" * 70)
+        for i, m in enumerate(rows, start=1):
+            label = ", ".join(p for p in (m.get("_name"), m.get("_admin1")) if p)
+            print(
+                f"{i:<5} "
+                f"{m.get('latitude')!s:>11}  {m.get('longitude')!s:>12}  "
+                f"{m.get('_cc', ''):<3} "
+                f"{(m.get('vote_winner_quarter') or ''):<9} {label}"
             )
         return 0
 

@@ -40,6 +40,12 @@ python leaderboard.py -u
 # Under-construction sites in Colombia
 python leaderboard.py -u -c CO
 
+# Sites that won their latest voting round (newest quarter first)
+python leaderboard.py -w
+
+# Voting winners in Japan
+python leaderboard.py -w -c JP
+
 # Use a different Tesla locale
 python leaderboard.py --locale es_co
 ```
@@ -49,8 +55,9 @@ python leaderboard.py --locale es_co
 | Flag | Default | Description |
 | --- | --- | --- |
 | `-n`, `--top` | `20` | How many top candidates to show. |
-| `-c`, `--country` | _(none)_ | ISO-2 country code filter (e.g. `US`, `TR`). Works for both voting candidates and `-u` markers. |
+| `-c`, `--country` | _(none)_ | ISO-2 country code filter (e.g. `US`, `TR`). Works for voting candidates and for `-u` / `-w` markers. |
 | `-u`, `--under-construction` | off | Show upcoming/under-construction supercharger map markers instead of open voting candidates. Sourced from `App.superchargerNetwork`; markers carry only coordinates, so the location label and country code are reverse-geocoded from lat/lon (offline, via `reverse_geocoder`). |
+| `-w`, `--winners` | off | Show sites that won their latest voting round (`supercharger-last-quarter-winner`), newest winning quarter first, with the quarter shown. Same `superchargerNetwork` source and reverse-geocoded labels as `-u`. Mutually exclusive with `-u`. |
 | `--locale` | `en_us` | Tesla locale path segment. |
 | `--headless` | off | Run Chrome with no visible window. Akamai detects headless and returns "Access Denied" — not recommended. |
 | `--debug` | off | On failure, write `debug.png` and `debug.html` and print page diagnostics. |
